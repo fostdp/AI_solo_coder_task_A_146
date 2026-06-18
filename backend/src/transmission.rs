@@ -6,6 +6,13 @@ const DEG_TO_ARCSEC: f64 = 3600.0;
 const DEG_TO_ARCMIN: f64 = 60.0;
 const ARCMIN_TO_RAD: f64 = std::f64::consts::PI / (180.0 * 60.0);
 
+const HERTZ_K: f64 = 2.8e11;
+const HERTZ_RESTITUTION: f64 = 0.72;
+const HERTZ_DAMPING_RATIO: f64 = 0.18;
+const TOOTH_EQUIV_MASS: f64 = 0.38;
+const CONTACT_ITERATIONS: usize = 50;
+const DT_COLLISION: f64 = 1.0e-7;
+
 pub struct TransmissionSimulator {
     axes: Vec<AxisConfig>,
 }
@@ -258,6 +265,30 @@ impl TransmissionSimulator {
         cumulative
     }
 
+    fn hertz_contact_force(delta: f64, delta_dot: f64, wear_level: f64) -> (f64, f64, f64) {
+        if delta <= 0.0 {
+            return (0.0, 0.0, 0.0);
+        }
+
+        let wear_correction = 1.0 - wear_level * 0.4;
+        let k_eff = HERTZ_K * wear_correction;
+
+        let f_elastic = k_eff * delta.powf(1.5);
+
+        let beta = 3.0 * HERTZ_DAMPING_RATIO * (1.0 - HERTZ_RESTITUTION.powi(2))
+            / (HERTZ_RESTITUTION * (HERTZ_RESTITUTION.powi(2) + 1.0));
+        let f_damping = if delta_dot < 0.0 {
+            beta * k_eff * delta.powf(1.5) * delta_dot.abs() / 1000.0
+        } else {
+            beta * k_eff * delta.powf(1.5) * delta_dot / 1000.0
+        };
+
+        let f_total = f_elastic + f_damping;
+        let u_elastic = (2.0 / 5.0) * k_eff * delta.powf(2.5);
+
+        (f_total, f_elastic, u_elastic)
+    }
+
     pub fn simulate_backlash_collision(
         &self,
         stage: &GearStage,
@@ -268,26 +299,75 @@ impl TransmissionSimulator {
         let mut rng = rand::thread_rng();
 
         let effective_backlash = stage.backlash * (1.0 + wear_level * 2.5);
-        let impact_velocity = angular_velocity * ARCMIN_TO_RAD;
 
-        let collision_force = if direction_change && angular_velocity.abs() > 0.01 {
-            let equivalent_mass = 0.5;
-            let impact_duration = 1.0e-4;
-            equivalent_mass * impact_velocity / impact_duration
+        if !direction_change || angular_velocity.abs() < 0.005 {
+            let micro_impact = effective_backlash * 0.05 * rng.gen::<f64>();
+            return (micro_impact, 0.0, micro_impact * 0.3);
+        }
+
+        let velocity_ms = angular_velocity * ARCMIN_TO_RAD * 0.05;
+
+        let mut delta = 0.0;
+        let mut delta_dot = velocity_ms;
+        let mut max_delta = 0.0;
+        let mut impulse = 0.0;
+        let mut dissipated = 0.0;
+        let mut peak_force = 0.0;
+        let mut ke_before = 0.5 * TOOTH_EQUIV_MASS * velocity_ms.powi(2);
+
+        for _ in 0..CONTACT_ITERATIONS {
+            let (f_total, _, u_elastic) = Self::hertz_contact_force(delta, delta_dot, wear_level);
+            peak_force = peak_force.max(f_total);
+
+            let accel = -f_total / TOOTH_EQUIV_MASS;
+            let delta_dot_new = delta_dot + accel * DT_COLLISION;
+            let delta_new = (delta + delta_dot * DT_COLLISION).max(0.0);
+
+            let work_damping = if delta_dot.abs() > 1e-9 {
+                (f_total - Self::hertz_contact_force(delta, 0.0, wear_level).0).abs()
+                    * (delta_new - delta).abs()
+            } else {
+                0.0
+            };
+            dissipated += work_damping;
+            impulse += f_total * DT_COLLISION;
+
+            delta = delta_new;
+            delta_dot = delta_dot_new;
+            max_delta = max_delta.max(delta);
+
+            if delta <= 0.0 && delta_dot > 0.0 {
+                break;
+            }
+        }
+
+        let ke_after = 0.5 * TOOTH_EQUIV_MASS * delta_dot.powi(2);
+        let (_, _, u_final) = Self::hertz_contact_force(delta, delta_dot, wear_level);
+        let energy_check = (ke_before - ke_after - dissipated - u_final) / ke_before.max(1e-9);
+
+        if energy_check.abs() > 0.05 {
+            let correction_factor = (ke_before - dissipated - u_final)
+                / ke_after.max(1e-9);
+            delta_dot *= correction_factor.sqrt().min(1.1).max(0.9);
+        }
+
+        let angular_velocity_out = delta_dot / (ARCMIN_TO_RAD * 0.05);
+        let angular_loss = (angular_velocity - angular_velocity_out).abs();
+        let impact_error_arcmin = (angular_loss / angular_velocity.abs())
+            .min(1.0)
+            * effective_backlash
+            * (0.55 + 0.2 * rng.gen::<f64>());
+
+        let impact_error = impact_error_arcmin;
+        let residual_vibration = if impact_error > 0.05 {
+            let freq_nat = (HERTZ_K * 1.5 * max_delta.sqrt() / TOOTH_EQUIV_MASS).sqrt();
+            let decay = (-HERTZ_DAMPING_RATIO * freq_nat * 0.05).exp();
+            impact_error * (1.0 - decay) * (0.6 + 0.4 * rng.gen::<f64>())
         } else {
             0.0
         };
 
-        let impact_error = if direction_change {
-            effective_backlash * (0.6 + 0.4 * rng.gen::<f64>())
-        } else {
-            0.0
-        };
-
-        let vibration_decay = (-impact_velocity * 5.0).exp();
-        let residual_vibration = impact_error * (1.0 - vibration_decay);
-
-        (impact_error, collision_force, residual_vibration)
+        (impact_error, peak_force, residual_vibration)
     }
 }
 

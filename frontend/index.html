@@ -600,92 +600,211 @@ for (let i = 0; i < 4; i++) {
   hunyiGroup.add(pillar);
 }
 
-// ==================== 齿轮（透明线框） ====================
+// ==================== 齿轮（透明线框 + 物理啮合碰撞检测） ====================
 const gearsGroup = new THREE.Group();
+
+function involutePoint(rBase, angle) {
+  const x = rBase * (Math.cos(angle) + angle * Math.sin(angle));
+  const y = rBase * (Math.sin(angle) - angle * Math.cos(angle));
+  return new THREE.Vector2(x, y);
+}
+
+function generateToothProfile(baseR, outerR, teeth, idx) {
+  const points = [];
+  const toothAngle = (Math.PI * 2) / teeth;
+  const halfTooth = toothAngle / 2;
+  const pressureAngle = 20 * Math.PI / 180;
+  const rPitch = (baseR + outerR) / 2;
+  const involuteEnd = Math.tan(pressureAngle);
+
+  const center = idx * toothAngle;
+  for (let t = 0; t <= 1; t += 0.05) {
+    const ang = involuteEnd * t;
+    const inv = involutePoint(baseR, ang);
+    const rotated = inv.rotateAround(new THREE.Vector2(0, 0), center - halfTooth);
+    points.push(new THREE.Vector3(rotated.x, rotated.y, 0));
+  }
+  for (let t = 1; t >= 0; t -= 0.05) {
+    const ang = involuteEnd * t;
+    const inv = involutePoint(baseR, ang);
+    const rotated = inv.rotateAround(new THREE.Vector2(0, 0), center + halfTooth);
+    const flipped = new THREE.Vector2(rotated.x, -rotated.y).rotateAround(new THREE.Vector2(0, 0), center + halfTooth);
+    const final = new THREE.Vector2(
+      Math.cos(center + halfTooth) * baseR + (flipped.x - Math.cos(center + halfTooth) * baseR),
+      Math.sin(center + halfTooth) * baseR + (flipped.y - Math.sin(center + halfTooth) * baseR)
+    );
+    points.push(new THREE.Vector3(final.x, final.y, 0));
+  }
+  return points;
+}
 
 function createGearWireframe(innerRadius, outerRadius, teeth, thickness, color, opacity) {
   const group = new THREE.Group();
+  const baseR = outerRadius * Math.cos(20 * Math.PI / 180);
+  const toothDepth = (outerRadius - innerRadius) * 0.6;
+  const rootR = outerRadius - toothDepth;
 
-  const points = [];
-  const toothDepth = (outerRadius - innerRadius) * 0.4;
-  for (let i = 0; i <= teeth; i++) {
-    const angle = (i / teeth) * Math.PI * 2;
-    for (let j = 0; j < 3; j++) {
-      const subAngle = angle + (j / 3) * (Math.PI * 2 / teeth);
-      const r = (j === 1) ? outerRadius : outerRadius - toothDepth;
-      points.push(new THREE.Vector3(Math.cos(subAngle) * r, Math.sin(subAngle) * r, 0));
-    }
+  const outlinePoints = [];
+  const toothProfiles = [];
+
+  for (let i = 0; i < teeth; i++) {
+    const toothPts = generateToothProfile(baseR, outerRadius, teeth, i);
+    outlinePoints.push(...toothPts);
+    toothProfiles.push(toothPts.map(p => p.clone()));
   }
+  const last = outlinePoints[0].clone();
+  outlinePoints.push(last);
 
-  const gearShape = new THREE.BufferGeometry().setFromPoints(points);
   const lineMat = new THREE.LineBasicMaterial({
     color: color,
     transparent: true,
     opacity: opacity
   });
-  const outline = new THREE.LineLoop(gearShape, lineMat);
+
+  const outlineGeo = new THREE.BufferGeometry().setFromPoints(outlinePoints);
+  const outline = new THREE.Line(outlineGeo, lineMat);
   group.add(outline);
+
+  const rootPts = [];
+  for (let i = 0; i <= 128; i++) {
+    const a = (i / 128) * Math.PI * 2;
+    rootPts.push(new THREE.Vector3(Math.cos(a) * rootR, Math.sin(a) * rootR, 0));
+  }
+  const rootCircle = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(rootPts), lineMat);
+  group.add(rootCircle);
 
   for (let sign of [-1, 1]) {
     const z = sign * thickness / 2;
-    const circlePoints = [];
+    const innerPts = [];
     for (let i = 0; i <= 64; i++) {
       const a = (i / 64) * Math.PI * 2;
-      circlePoints.push(new THREE.Vector3(Math.cos(a) * innerRadius, Math.sin(a) * innerRadius, z));
+      innerPts.push(new THREE.Vector3(Math.cos(a) * innerRadius, Math.sin(a) * innerRadius, z));
     }
-    const innerCircle = new THREE.LineLoop(
-      new THREE.BufferGeometry().setFromPoints(circlePoints),
-      lineMat
-    );
-    group.add(innerCircle);
+    group.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(innerPts), lineMat));
   }
 
-  const edgePoints = [];
+  const edgePts = [];
   for (let i = 0; i <= 12; i++) {
     const a = (i / 12) * Math.PI * 2;
-    edgePoints.push(new THREE.Vector3(Math.cos(a) * innerRadius, Math.sin(a) * innerRadius, -thickness / 2));
-    edgePoints.push(new THREE.Vector3(Math.cos(a) * innerRadius, Math.sin(a) * innerRadius, thickness / 2));
+    edgePts.push(new THREE.Vector3(Math.cos(a) * innerRadius, Math.sin(a) * innerRadius, -thickness / 2));
+    edgePts.push(new THREE.Vector3(Math.cos(a) * innerRadius, Math.sin(a) * innerRadius, thickness / 2));
   }
-  const edgesGeo = new THREE.BufferGeometry().setFromPoints(edgePoints);
-  const edges = new THREE.LineSegments(edgesGeo, lineMat);
-  group.add(edges);
+  group.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(edgePts), lineMat));
 
-  const spokePoints = [];
-  for (let i = 0; i < 6; i++) {
-    const a = (i / 6) * Math.PI * 2;
-    spokePoints.push(new THREE.Vector3(0, 0, -thickness / 2));
-    spokePoints.push(new THREE.Vector3(Math.cos(a) * innerRadius * 0.8, Math.sin(a) * innerRadius * 0.8, -thickness / 2));
-    spokePoints.push(new THREE.Vector3(0, 0, thickness / 2));
-    spokePoints.push(new THREE.Vector3(Math.cos(a) * innerRadius * 0.8, Math.sin(a) * innerRadius * 0.8, thickness / 2));
-  }
-  const spokes = new THREE.LineSegments(
-    new THREE.BufferGeometry().setFromPoints(spokePoints),
-    lineMat
-  );
-  group.add(spokes);
+  const contactPulseGeo = new THREE.RingGeometry(outerRadius * 0.92, outerRadius * 1.08, 32, 1, 0, Math.PI * 0.35);
+  const contactPulseMat = new THREE.MeshBasicMaterial({
+    color: 0xff4444,
+    transparent: true,
+    opacity: 0,
+    side: THREE.DoubleSide
+  });
+  const contactPulse = new THREE.Mesh(contactPulseGeo, contactPulseMat);
+  contactPulse.visible = false;
+  group.add(contactPulse);
+
+  group.userData = {
+    ...group.userData,
+    teeth: teeth,
+    baseR: baseR,
+    outerR: outerRadius,
+    innerR: innerRadius,
+    toothProfiles: toothProfiles,
+    contactPulse: contactPulse,
+    currentOmega: 0,
+    lastOmega: 0,
+    contactFlash: 0,
+    engagedTooth: -1
+  };
 
   return group;
 }
 
 const gearConfigs = [
-  { r: 0.55, pos: [2.0, -1.2, 0.3], teeth: 80, color: 0xfbbf24 },
-  { r: 0.45, pos: [2.0, -0.7, -0.5], teeth: 60, color: 0xf59e0b },
-  { r: 0.38, pos: [-2.0, -1.2, 0.5], teeth: 48, color: 0xfbbf24 },
-  { r: 0.48, pos: [-2.0, -0.6, -0.3], teeth: 72, color: 0xf59e0b },
-  { r: 0.32, pos: [0, -2.0, 1.8], teeth: 40, color: 0xfbbf24 },
-  { r: 0.42, pos: [0.5, -2.0, -1.8], teeth: 56, color: 0xf59e0b },
+  { id: 0, r: 0.55, pos: [2.0, -1.2, 0.3], teeth: 80, color: 0xfbbf24, baseSpeed: 1.8, pairWith: 1 },
+  { id: 1, r: 0.45, pos: [2.0, -0.7, -0.5], teeth: 60, color: 0xf59e0b, baseSpeed: -2.4, pairWith: 0 },
+  { id: 2, r: 0.38, pos: [-2.0, -1.2, 0.5], teeth: 48, color: 0xfbbf24, baseSpeed: 2.2, pairWith: 3 },
+  { id: 3, r: 0.48, pos: [-2.0, -0.6, -0.3], teeth: 72, color: 0xf59e0b, baseSpeed: -1.47, pairWith: 2 },
+  { id: 4, r: 0.32, pos: [0, -2.0, 1.8], teeth: 40, color: 0xfbbf24, baseSpeed: 2.6, pairWith: 5 },
+  { id: 5, r: 0.42, pos: [0.5, -2.0, -1.8], teeth: 56, color: 0xf59e0b, baseSpeed: -1.86, pairWith: 4 },
 ];
 
-gearConfigs.forEach((cfg, idx) => {
-  const gear = createGearWireframe(cfg.r * 0.5, cfg.r, cfg.teeth, 0.08, cfg.color, 0.55);
+gearConfigs.forEach(cfg => {
+  const gear = createGearWireframe(cfg.r * 0.45, cfg.r, cfg.teeth, 0.08, cfg.color, 0.6);
   gear.position.set(...cfg.pos);
-  gear.rotation.x = Math.random() * Math.PI;
-  gear.rotation.y = Math.random() * Math.PI;
-  gear.userData = { baseSpeed: 0.002 + Math.random() * 0.003, index: idx };
+  gear.rotation.x = 0.35 + cfg.id * 0.15;
+  gear.rotation.y = -0.25 + cfg.id * 0.1;
+  gear.userData.baseSpeed = cfg.baseSpeed;
+  gear.userData.id = cfg.id;
+  gear.userData.pairWith = cfg.pairWith;
+  gear.userData.cfg = cfg;
   gearsGroup.add(gear);
 });
 
 hunyiGroup.add(gearsGroup);
+
+function detectToothContact(gearA, gearB) {
+  const worldToLocalB = gearB.matrixWorld.clone().invert();
+  let minDist = Infinity;
+  let closestIdxA = -1;
+  let closestIdxB = -1;
+  let closestPoint = null;
+
+  for (let i = 0; i < gearA.userData.toothProfiles.length; i++) {
+    const profileA = gearA.userData.toothProfiles[i];
+    for (const pA of profileA) {
+      const worldA = pA.clone().applyMatrix4(gearA.matrixWorld);
+      const localB = worldA.clone().applyMatrix4(worldToLocalB);
+
+      for (let j = 0; j < gearB.userData.toothProfiles.length; j++) {
+        const profileB = gearB.userData.toothProfiles[j];
+        for (const pB of profileB) {
+          const dx = localB.x - pB.x;
+          const dy = localB.y - pB.y;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < minDist) {
+            minDist = dist;
+            closestIdxA = i;
+            closestIdxB = j;
+            closestPoint = worldA.clone();
+          }
+        }
+      }
+    }
+  }
+
+  return { minDist, closestIdxA, closestIdxB, closestPoint };
+}
+
+function enforceMeshingConstraint(gearA, gearB, dt) {
+  const ratio = -gearA.userData.cfg.teeth / gearB.userData.cfg.teeth;
+  const desiredOmegaB = gearA.userData.currentOmega * ratio;
+  const omegaError = gearB.userData.currentOmega - desiredOmegaB;
+
+  if (Math.abs(omegaError) > 0.05) {
+    gearB.userData.currentOmega -= omegaError * 0.25;
+    gearA.userData.currentOmega += omegaError * 0.1 * Math.abs(ratio);
+  }
+}
+
+function updateContactVisualization(gear, contactPoint) {
+  const pulse = gear.userData.contactPulse;
+  pulse.visible = true;
+  pulse.material.opacity = 0.85;
+  gear.userData.contactFlash = 1.0;
+
+  if (contactPoint) {
+    const local = contactPoint.clone().applyMatrix4(gear.matrixWorld.clone().invert());
+    const ang = Math.atan2(local.y, local.x);
+    pulse.rotation.z = ang - Math.PI * 0.18;
+  }
+
+  gear.children.forEach(child => {
+    if (child.material && child.material.color) {
+      child.material.color.setHex(0xff5555);
+      child.material.opacity = 0.9;
+    }
+  });
+}
 
 // ==================== 误差矢量箭头 ====================
 const errorArrowGroup = new THREE.Group();
@@ -792,8 +911,68 @@ function animate() {
     hunyiGroup.rotation.y += delta * 0.15;
   }
 
+  const processedPairs = new Set();
   gearsGroup.children.forEach(gear => {
-    gear.rotation.z += delta * gear.userData.baseSpeed * 30;
+    if (gear.userData.currentOmega === undefined) {
+      gear.userData.currentOmega = gear.userData.baseSpeed;
+    }
+    gear.userData.currentOmega += (gear.userData.baseSpeed - gear.userData.currentOmega) * Math.min(1, delta * 0.8);
+  });
+
+  gearsGroup.children.forEach(gearA => {
+    const pairIdx = gearA.userData.pairWith;
+    const pairKey = [Math.min(gearA.userData.id, pairIdx), Math.max(gearA.userData.id, pairIdx)].join('-');
+    if (processedPairs.has(pairKey)) return;
+    processedPairs.add(pairKey);
+
+    const gearB = gearsGroup.children[pairIdx];
+    if (!gearB) return;
+
+    enforceMeshingConstraint(gearA, gearB, delta);
+
+    const contact = detectToothContact(gearA, gearB);
+    const threshold = (gearA.userData.outerR + gearB.userData.outerR) * 0.02;
+
+    if (contact.minDist < threshold) {
+      const overlap = threshold - contact.minDist;
+      const hertzForce = 1.2e5 * Math.pow(overlap, 1.5);
+      const impulse = hertzForce * delta * 1e-6;
+
+      const ratioA = gearA.userData.cfg.teeth / (gearA.userData.cfg.teeth + gearB.userData.cfg.teeth);
+      gearA.userData.currentOmega -= impulse * ratioA * Math.sign(gearA.userData.currentOmega);
+      gearB.userData.currentOmega += impulse * (1 - ratioA) * Math.sign(gearB.userData.currentOmega);
+
+      if (gearA.userData.contactFlash < 0.1) {
+        updateContactVisualization(gearA, contact.closestPoint);
+        updateContactVisualization(gearB, contact.closestPoint);
+      }
+      gearA.userData.engagedTooth = contact.closestIdxA;
+      gearB.userData.engagedTooth = contact.closestIdxB;
+    }
+  });
+
+  gearsGroup.children.forEach(gear => {
+    gear.rotation.z += gear.userData.currentOmega * delta;
+
+    gear.userData.contactFlash = Math.max(0, gear.userData.contactFlash - delta * 3.5);
+    const pulse = gear.userData.contactPulse;
+    if (pulse) {
+      pulse.material.opacity = Math.max(0, pulse.material.opacity - delta * 3.0);
+      pulse.scale.setScalar(1 + (1 - pulse.material.opacity) * 0.3);
+      if (pulse.material.opacity < 0.01) pulse.visible = false;
+    }
+
+    if (gear.userData.contactFlash < 0.05 && gear.children) {
+      const cfg = gear.userData.cfg;
+      if (cfg) {
+        gear.children.forEach((child, idx) => {
+          if (idx < 4 && child.material && child.material.color) {
+            child.material.color.lerp(new THREE.Color(cfg.color), Math.min(1, delta * 4));
+            child.material.opacity = THREE.MathUtils.lerp(child.material.opacity, 0.55, Math.min(1, delta * 3));
+          }
+        });
+      }
+    }
   });
 
   if (state.currentReading) {

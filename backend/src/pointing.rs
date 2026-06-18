@@ -2,9 +2,27 @@ use crate::models::{PointingAccuracyResult, SensorReading};
 use chrono::Utc;
 
 const DEG_TO_ARCMIN: f64 = 60.0;
+const DEG_TO_RAD: f64 = std::f64::consts::PI / 180.0;
+
+const SHAFT_YOUNG_MODULUS: f64 = 2.06e11;
+const SHAFT_SHEAR_MODULUS: f64 = 7.93e10;
+const SHAFT_DENSITY: f64 = 7850.0;
+const SHAFT_DIAMETER: f64 = 0.025;
+const SHAFT_LENGTH: f64 = 0.45;
+const MODAL_DAMPING_RATIO: f64 = 0.035;
+const OPERATING_SPEED_RPM: f64 = 2.5;
+
+struct FlexibleAxisParams {
+    torsion_stiffness: f64,
+    bending_stiffness: f64,
+    torsion_nat_freq: f64,
+    bending_nat_freq: f64,
+    mass_moment: f64,
+}
 
 pub struct PointingAnalyzer {
     systematic_errors: SystematicErrors,
+    flex_params: FlexibleAxisParams,
 }
 
 struct SystematicErrors {
@@ -17,6 +35,36 @@ struct SystematicErrors {
 }
 
 impl PointingAnalyzer {
+    fn compute_flexible_params() -> FlexibleAxisParams {
+        let r = SHAFT_DIAMETER / 2.0;
+        let area = std::f64::consts::PI * r.powi(2);
+        let i_polar = std::f64::consts::PI * r.powi(4) / 2.0;
+        let i_area = std::f64::consts::PI * r.powi(4) / 4.0;
+
+        let torsion_stiffness = SHAFT_SHEAR_MODULUS * i_polar / SHAFT_LENGTH;
+        let bending_stiffness = SHAFT_YOUNG_MODULUS * i_area / SHAFT_LENGTH.powi(3) * 3.0;
+
+        let shaft_mass = SHAFT_DENSITY * area * SHAFT_LENGTH;
+        let mass_moment = shaft_mass * (3.0 * r.powi(2) + SHAFT_LENGTH.powi(2)) / 12.0;
+
+        let end_mass_moment = 0.55;
+        let total_moment = mass_moment + end_mass_moment;
+
+        let torsion_nat_freq = (torsion_stiffness / total_moment).sqrt() / (2.0 * std::f64::consts::PI);
+        let tip_equiv_mass = shaft_mass * 0.24 + 0.8;
+        let bending_nat_freq = (3.0 * SHAFT_YOUNG_MODULUS * i_area
+            / (tip_equiv_mass * SHAFT_LENGTH.powi(3))).sqrt()
+            / (2.0 * std::f64::consts::PI);
+
+        FlexibleAxisParams {
+            torsion_stiffness,
+            bending_stiffness,
+            torsion_nat_freq,
+            bending_nat_freq,
+            mass_moment: total_moment,
+        }
+    }
+
     pub fn new() -> Self {
         PointingAnalyzer {
             systematic_errors: SystematicErrors {
@@ -27,6 +75,7 @@ impl PointingAnalyzer {
                 collimation_error: 0.32,
                 refraction_coeff: 0.15,
             },
+            flex_params: Self::compute_flexible_params(),
         }
     }
 
@@ -66,21 +115,54 @@ impl PointingAnalyzer {
         coeff * el_rad.cos()
     }
 
+    fn dynamic_magnification_factor(r: f64, zeta: f64) -> f64 {
+        let denom = ((1.0 - r.powi(2)).powi(2) + (2.0 * zeta * r).powi(2)).sqrt();
+        1.0 / denom.max(0.01)
+    }
+
+    fn torsion_bending_coupling(el: f64) -> f64 {
+        let el_rad = el * DEG_TO_RAD;
+        1.0 + 0.35 * el_rad.sin().powi(2)
+    }
+
     pub fn compute_error_transfer_coefficient(
+        &self,
         az: f64,
         el: f64,
         cumulative_transmission_error: f64,
     ) -> f64 {
-        let az_rad = az * std::f64::consts::PI / 180.0;
-        let el_rad = el * std::f64::consts::PI / 180.0;
+        let az_rad = az * DEG_TO_RAD;
+        let el_rad = el * DEG_TO_RAD;
 
         let az_sensitivity = 1.0 / el_rad.cos().max(0.01);
         let el_sensitivity = 1.0;
-
         let geometric_factor = (az_sensitivity.powi(2) + el_sensitivity.powi(2)).sqrt();
-        let base_coeff = 1.0 + cumulative_transmission_error * 0.02;
 
-        geometric_factor * base_coeff
+        let omega_oper = OPERATING_SPEED_RPM * 2.0 * std::f64::consts::PI / 60.0;
+        let omega_torsion = self.flex_params.torsion_nat_freq * 2.0 * std::f64::consts::PI;
+        let omega_bending = self.flex_params.bending_nat_freq * 2.0 * std::f64::consts::PI;
+
+        let r_t = omega_oper / omega_torsion;
+        let r_b = omega_oper / omega_bending;
+
+        let dmf_torsion = Self::dynamic_magnification_factor(r_t, MODAL_DAMPING_RATIO);
+        let dmf_bending = Self::dynamic_magnification_factor(r_b, MODAL_DAMPING_RATIO);
+        let dynamic_factor = (dmf_torsion.powi(2) + dmf_bending.powi(2) * 0.6).sqrt();
+
+        let coupling_factor = Self::torsion_bending_coupling(el);
+
+        let modes = [1.0, 2.8, 5.3];
+        let damping = [MODAL_DAMPING_RATIO, MODAL_DAMPING_RATIO * 0.8, MODAL_DAMPING_RATIO * 0.6];
+        let weights = [0.65, 0.25, 0.10];
+        let mut modal_sum = 0.0;
+        for i in 0..3 {
+            let r_i = omega_oper / (modes[i] * omega_torsion);
+            modal_sum += weights[i] * Self::dynamic_magnification_factor(r_i, damping[i]);
+        }
+
+        let wear_softening = 1.0 + cumulative_transmission_error * 0.08;
+
+        geometric_factor * dynamic_factor * coupling_factor * modal_sum * wear_softening
     }
 
     pub fn equatorial_to_altaz(ra: f64, dec: f64, lst: f64, latitude: f64) -> (f64, f64) {
@@ -141,7 +223,7 @@ impl PointingAnalyzer {
 
         let achieved_precision = total_pointing_error;
 
-        let etc = Self::compute_error_transfer_coefficient(
+        let etc = self.compute_error_transfer_coefficient(
             target_az,
             target_el,
             reading.cumulative_transmission_error,
