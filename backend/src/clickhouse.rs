@@ -6,29 +6,31 @@ use std::error::Error;
 pub struct ClickHouseClient {
     base_url: String,
     database: String,
+    user: String,
+    password: String,
     client: Client,
 }
 
 impl ClickHouseClient {
-    pub fn new(base_url: &str, database: &str) -> Self {
+    pub fn new(base_url: impl Into<String>, user: impl Into<String>,
+               password: impl Into<String>, database: impl Into<String>) -> Self {
         ClickHouseClient {
-            base_url: base_url.to_string(),
-            database: database.to_string(),
+            base_url: base_url.into(),
+            database: database.into(),
+            user: user.into(),
+            password: password.into(),
             client: Client::new(),
         }
     }
 
     async fn execute_query(&self, query: &str) -> Result<String, Box<dyn Error + Send + Sync>> {
         let url = format!("{}/?database={}", self.base_url, self.database);
-        let resp = self
-            .client
-            .post(&url)
-            .body(query.to_string())
-            .send()
-            .await?;
-
-        let text = resp.text().await?;
-        Ok(text)
+        let mut req = self.client.post(&url).body(query.to_string());
+        if !self.user.is_empty() {
+            req = req.basic_auth(&self.user, Some(&self.password));
+        }
+        let resp = req.send().await?;
+        Ok(resp.text().await?)
     }
 
     pub async fn insert_sensor_reading(&self, r: &SensorReading) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -83,7 +85,8 @@ impl ClickHouseClient {
         );
         let resp = self.execute_query(&sql).await?;
         let parsed: Value = serde_json::from_str(&resp)?;
-        let data = parsed["data"].as_array().unwrap_or(&vec![]);
+        let empty = Vec::new();
+        let data = parsed["data"].as_array().unwrap_or(&empty);
         let mut results = Vec::new();
         for item in data {
             if let Ok(r) = serde_json::from_value::<SensorReading>(item.clone()) {
@@ -100,7 +103,8 @@ impl ClickHouseClient {
         );
         let resp = self.execute_query(&sql).await?;
         let parsed: Value = serde_json::from_str(&resp)?;
-        let data = parsed["data"].as_array().unwrap_or(&vec![]);
+        let empty = Vec::new();
+        let data = parsed["data"].as_array().unwrap_or(&empty);
         let mut results = Vec::new();
         for item in data {
             if let Ok(a) = serde_json::from_value::<AlarmEvent>(item.clone()) {
@@ -121,5 +125,91 @@ impl ClickHouseClient {
         );
         let resp = self.execute_query(&sql).await?;
         Ok(serde_json::from_str(&resp)?)
+    }
+
+    pub async fn query_transmission_errors(&self, device_id: &str, limit: usize)
+        -> Result<Vec<TransmissionErrorResult>, Box<dyn Error + Send + Sync>> {
+        let dev_filter = if device_id.is_empty() { String::new() }
+            else { format!("WHERE device_id = '{}' ", device_id) };
+        let sql = format!(
+            "SELECT * FROM transmission_error_analysis {}ORDER BY timestamp DESC LIMIT {} FORMAT JSON",
+            dev_filter, limit
+        );
+        let resp = self.execute_query(&sql).await?;
+        let parsed: Value = serde_json::from_str(&resp)?;
+        let empty = Vec::new();
+        let data = parsed["data"].as_array().unwrap_or(&empty);
+        let mut out = Vec::new();
+        for item in data {
+            if let Ok(r) = serde_json::from_value::<TransmissionErrorResult>(item.clone()) {
+                out.push(r);
+            }
+        }
+        Ok(out)
+    }
+
+    pub async fn query_pointing_accuracy(&self, device_id: &str, limit: usize)
+        -> Result<Vec<PointingAccuracyResult>, Box<dyn Error + Send + Sync>> {
+        let dev_filter = if device_id.is_empty() { String::new() }
+            else { format!("WHERE device_id = '{}' ", device_id) };
+        let sql = format!(
+            "SELECT * FROM pointing_accuracy_analysis {}ORDER BY timestamp DESC LIMIT {} FORMAT JSON",
+            dev_filter, limit
+        );
+        let resp = self.execute_query(&sql).await?;
+        let parsed: Value = serde_json::from_str(&resp)?;
+        let empty = Vec::new();
+        let data = parsed["data"].as_array().unwrap_or(&empty);
+        let mut out = Vec::new();
+        for item in data {
+            if let Ok(r) = serde_json::from_value::<PointingAccuracyResult>(item.clone()) {
+                out.push(r);
+            }
+        }
+        Ok(out)
+    }
+
+    pub async fn query_alarms(&self, device_id: &str, limit: usize, acknowledged: i8)
+        -> Result<Vec<AlarmEvent>, Box<dyn Error + Send + Sync>> {
+        let mut where_clauses = Vec::new();
+        if !device_id.is_empty() { where_clauses.push(format!("device_id = '{}'", device_id)); }
+        if acknowledged >= 0 { where_clauses.push(format!("is_acknowledged = {}", acknowledged)); }
+        let w = if where_clauses.is_empty() { String::new() }
+            else { format!("WHERE {} ", where_clauses.join(" AND ")) };
+        let sql = format!(
+            "SELECT * FROM alarm_events {}ORDER BY timestamp DESC LIMIT {} FORMAT JSON",
+            w, limit
+        );
+        let resp = self.execute_query(&sql).await?;
+        let parsed: Value = serde_json::from_str(&resp)?;
+        let empty = Vec::new();
+        let data = parsed["data"].as_array().unwrap_or(&empty);
+        let mut out = Vec::new();
+        for item in data {
+            if let Ok(r) = serde_json::from_value::<AlarmEvent>(item.clone()) {
+                out.push(r);
+            }
+        }
+        Ok(out)
+    }
+
+    pub async fn query_gear_status(&self, device_id: &str)
+        -> Result<Vec<GearStatus>, Box<dyn Error + Send + Sync>> {
+        let dev_filter = if device_id.is_empty() { String::new() }
+            else { format!("WHERE device_id = '{}' ", device_id) };
+        let sql = format!(
+            "SELECT * FROM gear_status {}ORDER BY timestamp DESC LIMIT 100 FORMAT JSON", dev_filter
+        );
+        let resp = self.execute_query(&sql).await?;
+        let parsed: Value = serde_json::from_str(&resp)?;
+        let empty = Vec::new();
+        let data = parsed["data"].as_array().unwrap_or(&empty);
+        let mut out = Vec::new();
+        for item in data {
+            if let Ok(r) = serde_json::from_value::<GearStatus>(item.clone()) {
+                out.push(r);
+            }
+        }
+        Ok(out)
     }
 }
