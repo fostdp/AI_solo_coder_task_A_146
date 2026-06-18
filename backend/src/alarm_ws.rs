@@ -1,4 +1,5 @@
 use crate::clickhouse::ClickHouseClient;
+use crate::metrics::ALARMS_TRIGGERED_TOTAL;
 use crate::models::{
     AlarmConfig, AlarmEvent, PipelineMessage, SensorReading, WebSocketMessage
 };
@@ -8,6 +9,7 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tracing::{error, info, warn, debug};
 use uuid::Uuid;
 
 // ==================== 告警评估器 ====================
@@ -117,7 +119,7 @@ impl AlarmEvaluator {
     }
 
     pub async fn run(mut self) {
-        log::info!("AlarmEvaluator actor started");
+        info!("AlarmEvaluator actor started");
         while let Some(msg) = self.rx.recv().await {
             match msg {
                 PipelineMessage::ValidatedReading(reading) => {
@@ -128,8 +130,11 @@ impl AlarmEvaluator {
                     for a in alarms {
                         let a_arc = Arc::new(a);
                         if let Err(e) = self.ch_client.insert_alarm(&a_arc).await {
-                            log::error!("Alarm CH insert error: {}", e);
+                            error!(error = %e, "Alarm CH insert error");
                         }
+                        ALARMS_TRIGGERED_TOTAL
+                            .with_label_values(&[&a_arc.alarm_type, &a_arc.alarm_level.to_string().as_str()])
+                            .inc();
                         self.ws_broadcaster.do_send(BroadcastAlarm { alarm: (*a_arc).clone() });
                     }
                     self.ws_broadcaster.do_send(BroadcastSensorReading {
@@ -149,7 +154,7 @@ impl AlarmEvaluator {
                 _ => {}
             }
         }
-        log::warn!("AlarmEvaluator actor stopped");
+        warn!("AlarmEvaluator actor stopped");
     }
 }
 

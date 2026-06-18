@@ -1,9 +1,12 @@
-CREATE DATABASE IF NOT EXISTS hunyi_astronomy
+CREATE DATABASE IF NOT EXISTS hunyi_analysis
     COMMENT '古代浑仪机械传动误差仿真与天体指向精度分析数据库'
     ENGINE = Atomic;
 
-USE hunyi_astronomy;
+USE hunyi_analysis;
 
+-- ============================================
+-- 传感器原始读数表（TTL: 30天 删除）
+-- ============================================
 CREATE TABLE IF NOT EXISTS sensor_readings (
     timestamp DateTime64(3, 'Asia/Shanghai') DEFAULT now64(3),
     device_id String COMMENT '浑仪设备编号',
@@ -32,9 +35,14 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (device_id, timestamp)
-TTL timestamp + INTERVAL 1 YEAR
+TTL timestamp + INTERVAL 7 DAY DELETE
+    , toYYYYMM(timestamp) + INTERVAL 1 MONTH RECOMPRESS CODEC(ZSTD(6))
+SETTINGS index_granularity = 8192
 COMMENT '浑仪传感器原始读数表';
 
+-- ============================================
+-- 传动误差分析表
+-- ============================================
 CREATE TABLE IF NOT EXISTS transmission_error_analysis (
     timestamp DateTime64(3, 'Asia/Shanghai') DEFAULT now64(3),
     device_id String,
@@ -53,9 +61,13 @@ CREATE TABLE IF NOT EXISTS transmission_error_analysis (
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (device_id, axis_id, timestamp)
-TTL timestamp + INTERVAL 1 YEAR
+TTL timestamp + INTERVAL 30 DAY DELETE
+SETTINGS index_granularity = 8192
 COMMENT '传动误差分析结果表';
 
+-- ============================================
+-- 指向精度分析表
+-- ============================================
 CREATE TABLE IF NOT EXISTS pointing_accuracy_analysis (
     timestamp DateTime64(3, 'Asia/Shanghai') DEFAULT now64(3),
     device_id String,
@@ -76,9 +88,13 @@ CREATE TABLE IF NOT EXISTS pointing_accuracy_analysis (
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (device_id, sky_zone, timestamp)
-TTL timestamp + INTERVAL 1 YEAR
+TTL timestamp + INTERVAL 30 DAY DELETE
+SETTINGS index_granularity = 8192
 COMMENT '指向精度分析结果表';
 
+-- ============================================
+-- 告警事件表（保留3年）
+-- ============================================
 CREATE TABLE IF NOT EXISTS alarm_events (
     timestamp DateTime64(3, 'Asia/Shanghai') DEFAULT now64(3),
     device_id String,
@@ -95,9 +111,13 @@ CREATE TABLE IF NOT EXISTS alarm_events (
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (device_id, alarm_level, timestamp)
-TTL timestamp + INTERVAL 3 YEAR
+TTL timestamp + INTERVAL 3 YEAR DELETE
+SETTINGS index_granularity = 8192
 COMMENT '告警事件表';
 
+-- ============================================
+-- 齿轮状态表
+-- ============================================
 CREATE TABLE IF NOT EXISTS gear_status (
     timestamp DateTime64(3, 'Asia/Shanghai') DEFAULT now64(3),
     device_id String,
@@ -113,28 +133,110 @@ CREATE TABLE IF NOT EXISTS gear_status (
 ENGINE = ReplacingMergeTree(timestamp)
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (device_id, gear_id)
-TTL timestamp + INTERVAL 1 YEAR
+TTL timestamp + INTERVAL 1 YEAR DELETE
+SETTINGS index_granularity = 8192
 COMMENT '齿轮状态表(最新状态)';
 
+-- ============================================
+-- 降采样物化视图：1分钟聚合
+-- ============================================
 CREATE MATERIALIZED VIEW IF NOT EXISTS sensor_readings_1min_mv
 ENGINE = SummingMergeTree()
 PARTITION BY toYYYYMM(timestamp)
-ORDER BY (device_id, toStartOfMinute(timestamp))
+ORDER BY (device_id, timestamp)
+TTL timestamp + INTERVAL 3 MONTH DELETE
 AS SELECT
     toStartOfMinute(timestamp) AS timestamp,
     device_id,
     count() AS readings_count,
     avg(cumulative_transmission_error) AS avg_cumulative_error,
     max(cumulative_transmission_error) AS max_cumulative_error,
+    min(cumulative_transmission_error) AS min_cumulative_error,
+    stddevPop(cumulative_transmission_error) AS stddev_cumulative_error,
     avg(ra_deviation) AS avg_ra_deviation,
     avg(dec_deviation) AS avg_dec_deviation,
-    avg(gear_meshing_error_1 + gear_meshing_error_2 + gear_meshing_error_3) / 3 AS avg_gear_error,
+    max(abs(ra_deviation)) AS max_abs_ra_deviation,
+    max(abs(dec_deviation)) AS max_abs_dec_deviation,
+    avg(gear_meshing_error_1) AS avg_gear_error_1,
+    avg(gear_meshing_error_2) AS avg_gear_error_2,
+    avg(gear_meshing_error_3) AS avg_gear_error_3,
     avg(gear_wear_level_1) AS avg_wear_1,
     avg(gear_wear_level_2) AS avg_wear_2,
-    avg(gear_wear_level_3) AS avg_wear_3
+    avg(gear_wear_level_3) AS avg_wear_3,
+    avg(temperature) AS avg_temperature,
+    avg(humidity) AS avg_humidity
 FROM sensor_readings
 GROUP BY device_id, toStartOfMinute(timestamp);
 
+-- ============================================
+-- 降采样物化视图：15分钟聚合
+-- ============================================
+CREATE MATERIALIZED VIEW IF NOT EXISTS sensor_readings_15min_mv
+ENGINE = SummingMergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (device_id, timestamp)
+TTL timestamp + INTERVAL 6 MONTH DELETE
+AS SELECT
+    toStartOfFifteenMinutes(timestamp) AS timestamp,
+    device_id,
+    sum(readings_count) AS readings_count,
+    avg(avg_cumulative_error) AS avg_cumulative_error,
+    max(max_cumulative_error) AS max_cumulative_error,
+    min(min_cumulative_error) AS min_cumulative_error,
+    avg(stddev_cumulative_error) AS stddev_cumulative_error
+FROM sensor_readings_1min_mv
+GROUP BY device_id, toStartOfFifteenMinutes(timestamp);
+
+-- ============================================
+-- 降采样物化视图：1小时聚合
+-- ============================================
+CREATE MATERIALIZED VIEW IF NOT EXISTS sensor_readings_1h_mv
+ENGINE = SummingMergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (device_id, timestamp)
+TTL timestamp + INTERVAL 1 YEAR DELETE
+AS SELECT
+    toStartOfHour(timestamp) AS timestamp,
+    device_id,
+    sum(readings_count) AS readings_count,
+    avg(avg_cumulative_error) AS avg_cumulative_error,
+    max(max_cumulative_error) AS max_cumulative_error,
+    min(min_cumulative_error) AS min_cumulative_error,
+    avg(stddev_cumulative_error) AS stddev_cumulative_error,
+    max(avg_wear_1) AS avg_wear_1,
+    max(avg_wear_2) AS avg_wear_2,
+    max(avg_wear_3) AS avg_wear_3
+FROM sensor_readings_15min_mv
+GROUP BY device_id, toStartOfHour(timestamp);
+
+-- ============================================
+-- 降采样物化视图：按天区聚合（每天）
+-- ============================================
+CREATE MATERIALIZED VIEW IF NOT EXISTS pointing_daily_by_zone_mv
+ENGINE = SummingMergeTree()
+PARTITION BY toYYYYMM(timestamp)
+ORDER BY (device_id, sky_zone, timestamp)
+TTL timestamp + INTERVAL 5 YEAR DELETE
+AS SELECT
+    toStartOfDay(timestamp) AS timestamp,
+    device_id,
+    sky_zone,
+    count() AS observation_count,
+    avg(total_pointing_error) AS avg_total_error,
+    max(total_pointing_error) AS max_total_error,
+    min(total_pointing_error) AS min_total_error,
+    stddevPop(total_pointing_error) AS stddev_total_error,
+    avg(ra_error) AS avg_ra_error,
+    avg(dec_error) AS avg_dec_error,
+    avg(error_transfer_coefficient) AS avg_error_transfer_coefficient,
+    avg(theoretical_precision) AS avg_theoretical_precision,
+    avg(achieved_precision) AS avg_achieved_precision
+FROM pointing_accuracy_analysis
+GROUP BY device_id, sky_zone, toStartOfDay(timestamp);
+
+-- ============================================
+-- 天区参考表
+-- ============================================
 CREATE TABLE IF NOT EXISTS sky_zone_reference (
     zone_id UInt8,
     zone_name String,

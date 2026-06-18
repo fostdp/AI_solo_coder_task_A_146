@@ -1,6 +1,8 @@
 use crate::clickhouse::ClickHouseClient;
+use crate::metrics::{CURRENT_CUMULATIVE_ERROR, CURRENT_GEAR_WEAR, SENSOR_READINGS_INVALID, SENSOR_READINGS_RECEIVED, SENSOR_READINGS_VALID};
 use crate::models::{GearParamsConfig, HunyiError, PipelineChannels, PipelineMessage, SensorReading, validate_reading};
 use std::sync::Arc;
+use tracing::{debug, error, info, warn};
 
 pub struct DtuReceiver {
     ch_client: Arc<ClickHouseClient>,
@@ -44,7 +46,15 @@ impl DtuReceiver {
     }
 
     pub async fn ingest(&self, mut reading: SensorReading) -> Result<Arc<SensorReading>, HunyiError> {
-        validate_reading(&reading, &self.gear_cfg.validation)?;
+        SENSOR_READINGS_RECEIVED.with_label_values(&["http"]).inc();
+
+        if let Err(e) = validate_reading(&reading, &self.gear_cfg.validation) {
+            SENSOR_READINGS_INVALID
+                .with_label_values(&[&reading.device_id, &e.to_string()])
+                .inc();
+            warn!(device_id = %reading.device_id, error = %e, "Invalid sensor reading");
+            return Err(e);
+        }
 
         reading.cumulative_transmission_error = self.compute_cumulative_error(&reading);
 
@@ -55,19 +65,27 @@ impl DtuReceiver {
 
         let arc = Arc::new(reading);
 
+        SENSOR_READINGS_VALID
+            .with_label_values(&[&arc.device_id])
+            .inc();
+        CURRENT_CUMULATIVE_ERROR.set((arc.cumulative_transmission_error * 1000.0) as i64);
+        let avg_wear = (arc.gear_wear_level_1 + arc.gear_wear_level_2 + arc.gear_wear_level_3) / 3.0;
+        CURRENT_GEAR_WEAR.set((avg_wear * 1000.0) as i64);
+
         if let Err(e) = self.channels.to_transmission.send(PipelineMessage::ValidatedReading(arc.clone())).await {
-            log::error!("DTU->transmission channel error: {}", e);
+            error!(error = %e, "DTU->transmission channel error");
         }
         if let Err(e) = self.channels.to_pointing.send(PipelineMessage::ValidatedReading(arc.clone())).await {
-            log::error!("DTU->pointing channel error: {}", e);
+            error!(error = %e, "DTU->pointing channel error");
         }
         if let Err(e) = self.channels.to_alarm_ws.send(PipelineMessage::ValidatedReading(arc.clone())).await {
-            log::error!("DTU->alarm_ws channel error: {}", e);
+            error!(error = %e, "DTU->alarm_ws channel error");
         }
 
-        log::debug!(
-            "DTU ingested reading device={}, cum_err={:.3} arcmin",
-            arc.device_id, arc.cumulative_transmission_error
+        debug!(
+            device_id = %arc.device_id,
+            cum_err = arc.cumulative_transmission_error,
+            "DTU ingested reading"
         );
         Ok(arc)
     }

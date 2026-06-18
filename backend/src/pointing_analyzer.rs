@@ -1,9 +1,11 @@
 use crate::clickhouse::ClickHouseClient;
+use crate::metrics::POINTING_JOBS_TOTAL;
 use crate::models::{GearParamsConfig, PipelineMessage, PointingAccuracyResult, SensorReading};
 use crate::models::ShaftParams;
 use chrono::Utc;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tracing::{error, info, warn, debug};
 
 const DEG_TO_ARCMIN: f64 = 60.0;
 const DEG_TO_RAD: f64 = std::f64::consts::PI / 180.0;
@@ -175,14 +177,17 @@ impl PointingAnalyzer {
     }
 
     pub async fn run(mut self) {
-        log::info!("PointingAnalyzer actor started");
+        info!("PointingAnalyzer actor started");
         while let Some(msg) = self.rx.recv().await {
             match msg {
                 PipelineMessage::ValidatedReading(reading) => {
                     let r = self.analyze(&reading);
                     if let Err(e) = self.ch_client.insert_pointing_accuracy(&r).await {
-                        log::error!("Pointing CH insert error: {}", e);
+                        error!(error = %e, "Pointing CH insert error");
                     }
+                    POINTING_JOBS_TOTAL
+                        .with_label_values(&[&r.sky_zone])
+                        .inc();
                     let arc = Arc::new(r);
                     let m1 = PipelineMessage::PointingResult(arc.clone());
                     let _ = self.ws_tx.send(m1.clone()).await;
@@ -191,7 +196,7 @@ impl PointingAnalyzer {
                 _ => {}
             }
         }
-        log::warn!("PointingAnalyzer actor stopped");
+        warn!("PointingAnalyzer actor stopped");
     }
 }
 

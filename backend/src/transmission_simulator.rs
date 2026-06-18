@@ -1,4 +1,5 @@
 use crate::clickhouse::ClickHouseClient;
+use crate::metrics::TRANSMISSION_JOBS_TOTAL;
 use crate::models::{
     AxisConfig, GearMaterialParams, GearParamsConfig, PipelineMessage,
     TransmissionErrorResult,
@@ -7,6 +8,7 @@ use chrono::Utc;
 use rand::Rng;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tracing::{error, info, warn, debug};
 
 const DEG_TO_ARCMIN: f64 = 60.0;
 const ARCMIN_TO_RAD: f64 = std::f64::consts::PI / (180.0 * 60.0);
@@ -230,7 +232,7 @@ impl TransmissionSimulator {
     }
 
     pub async fn run(mut self) {
-        log::info!("TransmissionSimulator actor started");
+        info!("TransmissionSimulator actor started");
 
         while let Some(msg) = self.rx.recv().await {
             match msg {
@@ -249,14 +251,17 @@ impl TransmissionSimulator {
                                 reading.gear_wear_level_2,
                                 reading.gear_wear_level_3,
                             ];
-                            let mut r = self.simulate_axis(
+                            let r = self.simulate_axis(
                                 axis, angle, 1, &wear_levels,
                                 reading.temperature, 5.0,
                                 &reading.device_id, reading.timestamp,
                             );
                             if let Err(e) = self.ch_client.insert_transmission_error(&r).await {
-                                log::error!("Transmission CH insert error: {}", e);
+                                error!(error = %e, "Transmission CH insert error");
                             }
+                            TRANSMISSION_JOBS_TOTAL
+                                .with_label_values(&[&axis_id.to_string()])
+                                .inc();
                             let r_arc = Arc::new(r);
                             results.push(r_arc.clone());
 
@@ -265,12 +270,10 @@ impl TransmissionSimulator {
                             let _ = self.alarm_tx.send(m).await;
                         }
                     }
-
-
                 }
                 _ => {}
             }
         }
-        log::warn!("TransmissionSimulator actor stopped");
+        warn!("TransmissionSimulator actor stopped");
     }
 }
