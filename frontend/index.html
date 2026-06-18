@@ -1,0 +1,995 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>古代浑仪机械传动误差仿真与天体指向精度分析系统</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
+    background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 50%, #0d1117 100%);
+    color: #e0e6f0;
+    overflow: hidden;
+    width: 100vw;
+    height: 100vh;
+  }
+  #app { display: flex; width: 100%; height: 100%; }
+  #canvas-container {
+    flex: 1;
+    position: relative;
+    background: radial-gradient(ellipse at center, #141b3d 0%, #070b1e 70%);
+  }
+  #canvas-container canvas { display: block; }
+  #sidebar {
+    width: 420px;
+    background: rgba(15, 20, 45, 0.95);
+    border-left: 1px solid rgba(100, 150, 255, 0.2);
+    overflow-y: auto;
+    padding: 20px;
+    backdrop-filter: blur(10px);
+  }
+  .panel {
+    background: rgba(30, 40, 80, 0.5);
+    border: 1px solid rgba(100, 150, 255, 0.15);
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 16px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  }
+  .panel h2 {
+    font-size: 15px;
+    color: #7eb4ff;
+    margin-bottom: 12px;
+    border-bottom: 1px solid rgba(100, 150, 255, 0.2);
+    padding-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .panel h2::before {
+    content: '';
+    width: 4px; height: 14px;
+    background: linear-gradient(180deg, #4c8bf5, #7eb4ff);
+    border-radius: 2px;
+  }
+  .header {
+    text-align: center;
+    padding: 12px 0 20px;
+  }
+  .header h1 {
+    font-size: 18px;
+    background: linear-gradient(90deg, #7eb4ff, #c4a3ff, #7eb4ff);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 4px;
+  }
+  .header .sub { font-size: 11px; color: #8a95b8; }
+  .status-bar {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-bottom: 14px; padding: 8px 12px;
+    background: rgba(50, 70, 130, 0.3);
+    border-radius: 6px; font-size: 12px;
+  }
+  .status-dot {
+    display: inline-block; width: 8px; height: 8px;
+    border-radius: 50%; margin-right: 6px;
+    animation: pulse 2s infinite;
+  }
+  .status-dot.connected { background: #4ade80; box-shadow: 0 0 8px #4ade80; }
+  .status-dot.disconnected { background: #f87171; box-shadow: 0 0 8px #f87171; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+  .data-row {
+    display: flex; justify-content: space-between;
+    padding: 5px 0; font-size: 12.5px;
+    border-bottom: 1px dashed rgba(100, 150, 255, 0.08);
+  }
+  .data-row:last-child { border-bottom: none; }
+  .data-label { color: #8a95b8; }
+  .data-value {
+    font-family: 'Consolas', monospace;
+    color: #b4c7ff;
+    font-weight: 500;
+  }
+  .data-value.highlight { color: #fbbf24; }
+  .data-value.danger { color: #f87171; font-weight: bold; }
+  .data-value.ok { color: #4ade80; }
+  .progress-bar {
+    width: 100%; height: 6px;
+    background: rgba(50, 70, 130, 0.4);
+    border-radius: 3px; overflow: hidden;
+    margin-top: 4px;
+  }
+  .progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #4ade80, #fbbf24, #f87171);
+    border-radius: 3px; transition: width 0.5s;
+  }
+  .alarm-item {
+    padding: 10px;
+    margin-bottom: 8px;
+    border-radius: 6px;
+    border-left: 3px solid;
+    font-size: 12px;
+    animation: slideIn 0.3s;
+  }
+  @keyframes slideIn {
+    from { transform: translateX(20px); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+  .alarm-item.level-1 {
+    background: rgba(251, 191, 36, 0.1);
+    border-color: #fbbf24;
+    color: #fde68a;
+  }
+  .alarm-item.level-2 {
+    background: rgba(248, 113, 113, 0.15);
+    border-color: #f87171;
+    color: #fecaca;
+  }
+  .alarm-item.level-3 {
+    background: rgba(239, 68, 68, 0.2);
+    border-color: #ef4444;
+    color: #fee2e2;
+    animation: flash 1s infinite;
+  }
+  @keyframes flash { 50% { opacity: 0.6; } }
+  .alarm-title { font-weight: bold; margin-bottom: 3px; }
+  .alarm-time { font-size: 10px; opacity: 0.7; }
+  .axis-diagram {
+    display: flex; justify-content: space-around;
+    margin-top: 8px;
+  }
+  .axis-indicator {
+    text-align: center; padding: 8px 4px;
+    background: rgba(50, 70, 130, 0.25);
+    border-radius: 6px;
+    flex: 1; margin: 0 3px;
+  }
+  .axis-indicator .axis-name {
+    font-size: 10px; color: #8a95b8; margin-bottom: 3px;
+  }
+  .axis-indicator .axis-value {
+    font-family: 'Consolas', monospace;
+    font-size: 14px; color: #7eb4ff;
+  }
+  .legend {
+    position: absolute;
+    bottom: 16px; left: 16px;
+    background: rgba(15, 20, 45, 0.85);
+    border: 1px solid rgba(100, 150, 255, 0.2);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: 12px;
+    backdrop-filter: blur(8px);
+  }
+  .legend-item { display: flex; align-items: center; margin: 4px 0; }
+  .legend-color {
+    width: 20px; height: 3px; margin-right: 10px;
+    border-radius: 2px;
+  }
+  .view-controls {
+    position: absolute;
+    top: 16px; left: 16px;
+    display: flex; flex-direction: column;
+    gap: 8px;
+  }
+  .view-controls button {
+    background: rgba(30, 40, 80, 0.85);
+    border: 1px solid rgba(100, 150, 255, 0.3);
+    color: #b4c7ff;
+    padding: 8px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.2s;
+    backdrop-filter: blur(8px);
+  }
+  .view-controls button:hover {
+    background: rgba(76, 139, 245, 0.3);
+    border-color: rgba(100, 150, 255, 0.6);
+  }
+  .view-controls button.active {
+    background: rgba(76, 139, 245, 0.4);
+    color: #fff;
+  }
+  .sky-stats {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 8px; font-size: 11px;
+  }
+  .sky-zone {
+    padding: 6px 8px;
+    background: rgba(50, 70, 130, 0.25);
+    border-radius: 4px;
+  }
+  .sky-zone .zone-name { color: #7eb4ff; font-weight: 500; margin-bottom: 3px; }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); }
+  ::-webkit-scrollbar-thumb { background: rgba(100, 150, 255, 0.3); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: rgba(100, 150, 255, 0.5); }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="canvas-container">
+    <div class="view-controls">
+      <button id="btn-rotate" class="active">自动旋转</button>
+      <button id="btn-gears">显示齿轮</button>
+      <button id="btn-error">显示误差</button>
+      <button id="btn-reset">重置视角</button>
+    </div>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-color" style="background:#4c8bf5"></div>四游仪环（赤经/赤纬）</div>
+      <div class="legend-item"><div class="legend-color" style="background:#7eb4ff"></div>三辰仪环（赤道/黄道）</div>
+      <div class="legend-item"><div class="legend-color" style="background:#a78bfa"></div>六合仪环（地平/子午）</div>
+      <div class="legend-item"><div class="legend-color" style="background:rgba(251,191,36,0.6)"></div>齿轮（透明线框）</div>
+      <div class="legend-item"><div class="legend-color" style="background:#f87171"></div>指向误差矢量</div>
+      <div class="legend-item"><div class="legend-color" style="background:#4ade80"></div>理论指向矢量</div>
+    </div>
+  </div>
+  <div id="sidebar">
+    <div class="header">
+      <h1>浑仪误差仿真分析系统</h1>
+      <div class="sub">宋代浑仪复原研究 · 机械传动与天体指向</div>
+    </div>
+
+    <div class="status-bar">
+      <span><span class="status-dot disconnected" id="conn-dot"></span><span id="conn-text">未连接</span></span>
+      <span id="clock">--:--:--</span>
+    </div>
+
+    <div class="panel">
+      <h2>轴系转角</h2>
+      <div class="axis-diagram">
+        <div class="axis-indicator">
+          <div class="axis-name">方位轴 (AZ)</div>
+          <div class="axis-value" id="az-val">0.00°</div>
+        </div>
+        <div class="axis-indicator">
+          <div class="axis-name">赤纬轴 (EL)</div>
+          <div class="axis-value" id="el-val">0.00°</div>
+        </div>
+        <div class="axis-indicator">
+          <div class="axis-name">赤道轴 (EQ)</div>
+          <div class="axis-value" id="eq-val">0.00°</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>传动误差</h2>
+      <div class="data-row">
+        <span class="data-label">累积传动误差</span>
+        <span class="data-value" id="cum-err">0.000'</span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" id="cum-err-bar" style="width:0%"></div></div>
+      <div class="data-row" style="margin-top:8px;">
+        <span class="data-label">齿轮组1啮合误差</span>
+        <span class="data-value" id="gear1-err">0.000'</span>
+      </div>
+      <div class="data-row">
+        <span class="data-label">齿轮组2啮合误差</span>
+        <span class="data-value" id="gear2-err">0.000'</span>
+      </div>
+      <div class="data-row">
+        <span class="data-label">齿轮组3啮合误差</span>
+        <span class="data-value" id="gear3-err">0.000'</span>
+      </div>
+      <div class="data-row">
+        <span class="data-label">齿隙误差</span>
+        <span class="data-value" id="backlash-err">0.000'</span>
+      </div>
+      <div class="data-row">
+        <span class="data-label">弹性变形误差</span>
+        <span class="data-value" id="elastic-err">0.000'</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>齿轮磨损</h2>
+      <div class="data-row">
+        <span class="data-label">齿轮组1</span>
+        <span class="data-value" id="wear1">0.0%</span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" id="wear1-bar" style="width:0%"></div></div>
+      <div class="data-row" style="margin-top:8px;">
+        <span class="data-label">齿轮组2</span>
+        <span class="data-value" id="wear2">0.0%</span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" id="wear2-bar" style="width:0%"></div></div>
+      <div class="data-row" style="margin-top:8px;">
+        <span class="data-label">齿轮组3</span>
+        <span class="data-value" id="wear3">0.0%</span>
+      </div>
+      <div class="progress-bar"><div class="progress-fill" id="wear3-bar" style="width:0%"></div></div>
+    </div>
+
+    <div class="panel">
+      <h2>天体指向精度</h2>
+      <div class="data-row">
+        <span class="data-label">目标赤经 (RA)</span>
+        <span class="data-value" id="target-ra">0.00°</span>
+      </div>
+      <div class="data-row">
+        <span class="data-label">目标赤纬 (Dec)</span>
+        <span class="data-value" id="target-dec">0.00°</span>
+      </div>
+      <div class="data-row">
+        <span class="data-label">赤经误差 ΔRA</span>
+        <span class="data-value" id="ra-err">0.000'</span>
+      </div>
+      <div class="data-row">
+        <span class="data-label">赤纬误差 ΔDec</span>
+        <span class="data-value" id="dec-err">0.000'</span>
+      </div>
+      <div class="data-row">
+        <span class="data-label">总指向误差</span>
+        <span class="data-value" id="total-err">0.000'</span>
+      </div>
+      <div class="data-row">
+        <span class="data-label">当前天区</span>
+        <span class="data-value highlight" id="sky-zone">--</span>
+      </div>
+      <div class="data-row">
+        <span class="data-label">误差传递系数</span>
+        <span class="data-value" id="etc">1.000</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>环境参数</h2>
+      <div class="data-row">
+        <span class="data-label">温度</span>
+        <span class="data-value" id="temp">0.0°C</span>
+      </div>
+      <div class="data-row">
+        <span class="data-label">湿度</span>
+        <span class="data-value" id="humidity">0%</span>
+      </div>
+      <div class="data-row">
+        <span class="data-label">轴承1间隙</span>
+        <span class="data-value" id="brg1">0.000'</span>
+      </div>
+      <div class="data-row">
+        <span class="data-label">轴承2间隙</span>
+        <span class="data-value" id="brg2">0.000'</span>
+      </div>
+      <div class="data-row">
+        <span class="data-label">轴承3间隙</span>
+        <span class="data-value" id="brg3">0.000'</span>
+      </div>
+    </div>
+
+    <div class="panel" id="alarm-panel">
+      <h2>告警信息</h2>
+      <div id="alarm-list">
+        <div style="color:#8a95b8;font-size:12px;text-align:center;padding:10px;">暂无告警</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ==================== 全局状态 ====================
+const state = {
+  autoRotate: true,
+  showGears: true,
+  showError: true,
+  currentReading: null,
+  currentPointing: null,
+  currentTransmission: {},
+  alarms: []
+};
+
+// ==================== Three.js 场景初始化 ====================
+const container = document.getElementById('canvas-container');
+const scene = new THREE.Scene();
+scene.background = null;
+scene.fog = new THREE.FogExp2(0x0a0e27, 0.015);
+
+const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+camera.position.set(5, 3.5, 7);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setSize(container.clientWidth, container.clientHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+container.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.minDistance = 3;
+controls.maxDistance = 25;
+
+// ==================== 灯光 ====================
+const ambient = new THREE.AmbientLight(0x4a6fff, 0.5);
+scene.add(ambient);
+
+const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+dirLight.position.set(5, 10, 5);
+dirLight.castShadow = true;
+scene.add(dirLight);
+
+const pointLight1 = new THREE.PointLight(0x4c8bf5, 1, 20);
+pointLight1.position.set(-5, 3, 5);
+scene.add(pointLight1);
+
+const pointLight2 = new THREE.PointLight(0xa78bfa, 0.6, 15);
+pointLight2.position.set(5, -2, -5);
+scene.add(pointLight2);
+
+// ==================== 星空背景 ====================
+function createStarField() {
+  const stars = new THREE.BufferGeometry();
+  const starCount = 3000;
+  const positions = new Float32Array(starCount * 3);
+  const colors = new Float32Array(starCount * 3);
+
+  for (let i = 0; i < starCount; i++) {
+    const r = 80 + Math.random() * 40;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+    positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+    positions[i * 3 + 2] = r * Math.cos(phi);
+
+    const temp = Math.random();
+    if (temp < 0.33) {
+      colors[i * 3] = 0.8; colors[i * 3 + 1] = 0.9; colors[i * 3 + 2] = 1.0;
+    } else if (temp < 0.66) {
+      colors[i * 3] = 1.0; colors[i * 3 + 1] = 1.0; colors[i * 3 + 2] = 0.95;
+    } else {
+      colors[i * 3] = 1.0; colors[i * 3 + 1] = 0.9; colors[i * 3 + 2] = 0.8;
+    }
+  }
+
+  stars.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  stars.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+  const starMat = new THREE.PointsMaterial({
+    size: 0.15,
+    vertexColors: true,
+    transparent: true,
+    opacity: 0.85
+  });
+
+  return new THREE.Points(stars, starMat);
+}
+scene.add(createStarField());
+
+// ==================== 浑仪主体 ====================
+const hunyiGroup = new THREE.Group();
+scene.add(hunyiGroup);
+
+function createRing(radius, thickness, color, opacity = 0.7) {
+  const geometry = new THREE.TorusGeometry(radius, thickness, 32, 128);
+  const material = new THREE.MeshPhysicalMaterial({
+    color: color,
+    metalness: 0.7,
+    roughness: 0.3,
+    transparent: true,
+    opacity: opacity,
+    emissive: color,
+    emissiveIntensity: 0.15,
+    clearcoat: 0.3
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+// 六合仪（最外层）
+const liuheGroup = new THREE.Group();
+const liuhe_color = 0xa78bfa;
+
+const liuhe_horizon = createRing(2.8, 0.06, liuhe_color, 0.65);
+liuheGroup.add(liuhe_horizon);
+
+const liuhe_meridian = createRing(2.8, 0.06, liuhe_color, 0.65);
+liuhe_meridian.rotation.x = Math.PI / 2;
+liuheGroup.add(liuhe_meridian);
+
+const liuhe_prime = createRing(2.8, 0.06, liuhe_color, 0.5);
+liuhe_prime.rotation.x = Math.PI / 2;
+liuhe_prime.rotation.y = Math.PI / 2;
+liuheGroup.add(liuhe_prime);
+
+hunyiGroup.add(liuheGroup);
+
+// 三辰仪（中间层）
+const sanchenGroup = new THREE.Group();
+const sanchen_color = 0x7eb4ff;
+
+const sanchen_equator = createRing(2.2, 0.05, sanchen_color, 0.75);
+sanchen_equator.rotation.x = (23.5 * Math.PI / 180);
+sanchenGroup.add(sanchen_equator);
+
+const sanchen_ecliptic = createRing(2.2, 0.05, 0xfbbf24, 0.7);
+sanchenGroup.add(sanchen_ecliptic);
+
+const sanchen_meridian = createRing(2.2, 0.05, sanchen_color, 0.7);
+sanchen_meridian.rotation.x = Math.PI / 2;
+sanchenGroup.add(sanchen_meridian);
+
+hunyiGroup.add(sanchenGroup);
+
+// 四游仪（最内层，可转动）
+const siyoutGroup = new THREE.Group();
+const siyout_color = 0x4c8bf5;
+
+const siyou_ring = createRing(1.6, 0.055, siyout_color, 0.85);
+siyou_ring.rotation.x = Math.PI / 2;
+siyoutGroup.add(siyou_ring);
+
+// 窥管
+const sightTubeGeo = new THREE.CylinderGeometry(0.035, 0.035, 3.0, 16);
+const sightTubeMat = new THREE.MeshPhysicalMaterial({
+  color: 0x60a5fa,
+  metalness: 0.8,
+  roughness: 0.25,
+  transparent: true,
+  opacity: 0.9,
+  emissive: 0x1e40af,
+  emissiveIntensity: 0.2
+});
+const sightTube = new THREE.Mesh(sightTubeGeo, sightTubeMat);
+sightTube.rotation.z = Math.PI / 2;
+sightTube.castShadow = true;
+siyoutGroup.add(sightTube);
+
+// 中心轴
+const axisGeo = new THREE.CylinderGeometry(0.04, 0.04, 3.2, 16);
+const axisMat = new THREE.MeshPhysicalMaterial({
+  color: 0xc084fc,
+  metalness: 0.9,
+  roughness: 0.2
+});
+const axis = new THREE.Mesh(axisGeo, axisMat);
+hunyiGroup.add(axis);
+
+hunyiGroup.add(siyoutGroup);
+
+// 基座
+const baseGeo = new THREE.CylinderGeometry(1.8, 2.2, 0.3, 48);
+const baseMat = new THREE.MeshPhysicalMaterial({
+  color: 0x374151,
+  metalness: 0.6,
+  roughness: 0.5
+});
+const base = new THREE.Mesh(baseGeo, baseMat);
+base.position.y = -1.9;
+base.receiveShadow = true;
+hunyiGroup.add(base);
+
+// 支柱
+function createPillar() {
+  const pillarGroup = new THREE.Group();
+  const geo = new THREE.CylinderGeometry(0.05, 0.07, 1.6, 12);
+  const mat = new THREE.MeshPhysicalMaterial({
+    color: 0x6b7280,
+    metalness: 0.7,
+    roughness: 0.4
+  });
+  const pillar = new THREE.Mesh(geo, mat);
+  pillar.castShadow = true;
+  pillarGroup.add(pillar);
+  return pillarGroup;
+}
+for (let i = 0; i < 4; i++) {
+  const angle = (i * Math.PI / 2) + Math.PI / 4;
+  const pillar = createPillar();
+  pillar.position.set(Math.cos(angle) * 1.3, -1.0, Math.sin(angle) * 1.3);
+  pillar.rotation.z = Math.cos(angle) * 0.15;
+  pillar.rotation.x = Math.sin(angle) * 0.15;
+  hunyiGroup.add(pillar);
+}
+
+// ==================== 齿轮（透明线框） ====================
+const gearsGroup = new THREE.Group();
+
+function createGearWireframe(innerRadius, outerRadius, teeth, thickness, color, opacity) {
+  const group = new THREE.Group();
+
+  const points = [];
+  const toothDepth = (outerRadius - innerRadius) * 0.4;
+  for (let i = 0; i <= teeth; i++) {
+    const angle = (i / teeth) * Math.PI * 2;
+    for (let j = 0; j < 3; j++) {
+      const subAngle = angle + (j / 3) * (Math.PI * 2 / teeth);
+      const r = (j === 1) ? outerRadius : outerRadius - toothDepth;
+      points.push(new THREE.Vector3(Math.cos(subAngle) * r, Math.sin(subAngle) * r, 0));
+    }
+  }
+
+  const gearShape = new THREE.BufferGeometry().setFromPoints(points);
+  const lineMat = new THREE.LineBasicMaterial({
+    color: color,
+    transparent: true,
+    opacity: opacity
+  });
+  const outline = new THREE.LineLoop(gearShape, lineMat);
+  group.add(outline);
+
+  for (let sign of [-1, 1]) {
+    const z = sign * thickness / 2;
+    const circlePoints = [];
+    for (let i = 0; i <= 64; i++) {
+      const a = (i / 64) * Math.PI * 2;
+      circlePoints.push(new THREE.Vector3(Math.cos(a) * innerRadius, Math.sin(a) * innerRadius, z));
+    }
+    const innerCircle = new THREE.LineLoop(
+      new THREE.BufferGeometry().setFromPoints(circlePoints),
+      lineMat
+    );
+    group.add(innerCircle);
+  }
+
+  const edgePoints = [];
+  for (let i = 0; i <= 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    edgePoints.push(new THREE.Vector3(Math.cos(a) * innerRadius, Math.sin(a) * innerRadius, -thickness / 2));
+    edgePoints.push(new THREE.Vector3(Math.cos(a) * innerRadius, Math.sin(a) * innerRadius, thickness / 2));
+  }
+  const edgesGeo = new THREE.BufferGeometry().setFromPoints(edgePoints);
+  const edges = new THREE.LineSegments(edgesGeo, lineMat);
+  group.add(edges);
+
+  const spokePoints = [];
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    spokePoints.push(new THREE.Vector3(0, 0, -thickness / 2));
+    spokePoints.push(new THREE.Vector3(Math.cos(a) * innerRadius * 0.8, Math.sin(a) * innerRadius * 0.8, -thickness / 2));
+    spokePoints.push(new THREE.Vector3(0, 0, thickness / 2));
+    spokePoints.push(new THREE.Vector3(Math.cos(a) * innerRadius * 0.8, Math.sin(a) * innerRadius * 0.8, thickness / 2));
+  }
+  const spokes = new THREE.LineSegments(
+    new THREE.BufferGeometry().setFromPoints(spokePoints),
+    lineMat
+  );
+  group.add(spokes);
+
+  return group;
+}
+
+const gearConfigs = [
+  { r: 0.55, pos: [2.0, -1.2, 0.3], teeth: 80, color: 0xfbbf24 },
+  { r: 0.45, pos: [2.0, -0.7, -0.5], teeth: 60, color: 0xf59e0b },
+  { r: 0.38, pos: [-2.0, -1.2, 0.5], teeth: 48, color: 0xfbbf24 },
+  { r: 0.48, pos: [-2.0, -0.6, -0.3], teeth: 72, color: 0xf59e0b },
+  { r: 0.32, pos: [0, -2.0, 1.8], teeth: 40, color: 0xfbbf24 },
+  { r: 0.42, pos: [0.5, -2.0, -1.8], teeth: 56, color: 0xf59e0b },
+];
+
+gearConfigs.forEach((cfg, idx) => {
+  const gear = createGearWireframe(cfg.r * 0.5, cfg.r, cfg.teeth, 0.08, cfg.color, 0.55);
+  gear.position.set(...cfg.pos);
+  gear.rotation.x = Math.random() * Math.PI;
+  gear.rotation.y = Math.random() * Math.PI;
+  gear.userData = { baseSpeed: 0.002 + Math.random() * 0.003, index: idx };
+  gearsGroup.add(gear);
+});
+
+hunyiGroup.add(gearsGroup);
+
+// ==================== 误差矢量箭头 ====================
+const errorArrowGroup = new THREE.Group();
+
+function createArrow(color, from, to, headLength = 0.3, headWidth = 0.12) {
+  const dir = new THREE.Vector3().subVectors(to, from).normalize();
+  const length = from.distanceTo(to);
+  return new THREE.ArrowHelper(dir, from, length, color, headLength, headWidth);
+}
+
+const theoreticalArrow = createArrow(0x4ade80, new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 2, 0), 0.25, 0.1);
+theoreticalArrow.material.transparent = true;
+theoreticalArrow.material.opacity = 0.75;
+errorArrowGroup.add(theoreticalArrow);
+
+const errorArrow = createArrow(0xf87171, new THREE.Vector3(0, 0, 0), new THREE.Vector3(0.1, 1.9, 0), 0.25, 0.1);
+errorArrow.material.transparent = true;
+errorArrow.material.opacity = 0.9;
+errorArrowGroup.add(errorArrow);
+
+const deviationLineMat = new THREE.LineDashedMaterial({
+  color: 0xf87171,
+  dashSize: 0.08,
+  gapSize: 0.05,
+  transparent: true,
+  opacity: 0.7
+});
+const deviationGeo = new THREE.BufferGeometry().setFromPoints([
+  new THREE.Vector3(0, 2, 0), new THREE.Vector3(0.1, 1.9, 0)
+]);
+const deviationLine = new THREE.Line(deviationGeo, deviationLineMat);
+deviationLine.computeLineDistances();
+errorArrowGroup.add(deviationLine);
+
+const errorLabelGeo = new THREE.SphereGeometry(0.04, 16, 16);
+const errorLabelMat = new THREE.MeshBasicMaterial({ color: 0xef4444 });
+const errorLabel = new THREE.Mesh(errorLabelGeo, errorLabelMat);
+errorLabel.position.set(0.05, 1.95, 0);
+errorArrowGroup.add(errorLabel);
+
+hunyiGroup.add(errorArrowGroup);
+
+// 刻度标注
+function createTickMarks(ringRadius, count, color, length = 0.08) {
+  const group = new THREE.Group();
+  for (let i = 0; i < count; i++) {
+    const angle = (i / count) * Math.PI * 2;
+    const inner = ringRadius - length;
+    const outer = ringRadius + 0.02;
+    const isMajor = i % (count / 12) === 0;
+    const pts = [
+      new THREE.Vector3(Math.cos(angle) * (isMajor ? inner - 0.05 : inner), Math.sin(angle) * (isMajor ? inner - 0.05 : inner), 0),
+      new THREE.Vector3(Math.cos(angle) * outer, Math.sin(angle) * outer, 0)
+    ];
+    const geo = new THREE.BufferGeometry().setFromPoints(pts);
+    const mat = new THREE.LineBasicMaterial({ color: color, transparent: true, opacity: isMajor ? 0.8 : 0.4 });
+    group.add(new THREE.Line(geo, mat));
+  }
+  return group;
+}
+
+const ticks_eq = createTickMarks(2.2, 72, 0x7eb4ff);
+ticks_eq.rotation.x = 23.5 * Math.PI / 180;
+sanchenGroup.add(ticks_eq);
+
+const ticks_ecl = createTickMarks(2.2, 72, 0xfbbf24);
+sanchenGroup.add(ticks_ecl);
+
+const ticks_siyou = createTickMarks(1.6, 48, 0x4c8bf5);
+ticks_siyou.rotation.x = Math.PI / 2;
+siyoutGroup.add(ticks_siyou);
+
+// ==================== UI 按钮事件 ====================
+document.getElementById('btn-rotate').addEventListener('click', (e) => {
+  state.autoRotate = !state.autoRotate;
+  e.target.classList.toggle('active', state.autoRotate);
+});
+document.getElementById('btn-gears').addEventListener('click', (e) => {
+  state.showGears = !state.showGears;
+  gearsGroup.visible = state.showGears;
+  e.target.classList.toggle('active', state.showGears);
+});
+document.getElementById('btn-error').addEventListener('click', (e) => {
+  state.showError = !state.showError;
+  errorArrowGroup.visible = state.showError;
+  e.target.classList.toggle('active', state.showError);
+});
+document.getElementById('btn-reset').addEventListener('click', () => {
+  camera.position.set(5, 3.5, 7);
+  controls.target.set(0, 0, 0);
+  controls.update();
+});
+
+// ==================== 动画循环 ====================
+const clock = new THREE.Clock();
+let timeAccum = 0;
+
+function animate() {
+  requestAnimationFrame(animate);
+  const delta = clock.getDelta();
+  timeAccum += delta;
+
+  if (state.autoRotate) {
+    hunyiGroup.rotation.y += delta * 0.15;
+  }
+
+  gearsGroup.children.forEach(gear => {
+    gear.rotation.z += delta * gear.userData.baseSpeed * 30;
+  });
+
+  if (state.currentReading) {
+    siyoutGroup.rotation.y = state.currentReading.axis_azimuth_angle * Math.PI / 180;
+    siyoutGroup.rotation.x = (90 - state.currentReading.axis_elevation_angle) * Math.PI / 180;
+    sanchenGroup.rotation.z = state.currentReading.axis_equatorial_angle * Math.PI / 180;
+  }
+
+  if (state.showError && state.currentPointing) {
+    const errScale = 5.0;
+    const raRad = state.currentPointing.target_ra * Math.PI / 180;
+    const decRad = state.currentPointing.target_dec * Math.PI / 180;
+    const r = 2.0;
+
+    const tx = r * Math.cos(decRad) * Math.cos(raRad);
+    const ty = r * Math.sin(decRad);
+    const tz = r * Math.cos(decRad) * Math.sin(raRad);
+    const target = new THREE.Vector3(tx, ty, tz);
+
+    theoreticalArrow.setDirection(target.clone().normalize());
+    theoreticalArrow.setLength(target.length(), 0.2, 0.1);
+
+    const errRaRad = (state.currentPointing.ra_error / 60) * Math.PI / 180;
+    const errDecRad = (state.currentPointing.dec_error / 60) * Math.PI / 180;
+
+    const mx = r * Math.cos(decRad + errDecRad) * Math.cos(raRad + errRaRad);
+    const my = r * Math.sin(decRad + errDecRad);
+    const mz = r * Math.cos(decRad + errDecRad) * Math.sin(raRad + errRaRad);
+    const measured = new THREE.Vector3(mx, my, mz);
+
+    errorArrow.setDirection(measured.clone().normalize());
+    errorArrow.setLength(measured.length(), 0.2, 0.1);
+
+    deviationGeo.setFromPoints([target, measured]);
+    deviationGeo.computeLineDistances();
+    errorLabel.position.copy(target.clone().add(measured).multiplyScalar(0.5));
+  }
+
+  pointLight1.intensity = 1.0 + Math.sin(timeAccum * 2) * 0.2;
+  pointLight2.intensity = 0.6 + Math.cos(timeAccum * 1.5) * 0.15;
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+// ==================== 窗口自适应 ====================
+window.addEventListener('resize', () => {
+  camera.aspect = container.clientWidth / container.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(container.clientWidth, container.clientHeight);
+});
+
+// ==================== WebSocket 实时数据 ====================
+function updateClock() {
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString('zh-CN');
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+function setConnectedStatus(connected) {
+  const dot = document.getElementById('conn-dot');
+  const text = document.getElementById('conn-text');
+  if (connected) {
+    dot.className = 'status-dot connected';
+    text.textContent = '已连接';
+  } else {
+    dot.className = 'status-dot disconnected';
+    text.textContent = '未连接';
+  }
+}
+
+function fmt(num, digits = 3) {
+  return (num || 0).toFixed(digits);
+}
+
+function updateSensorUI(r) {
+  state.currentReading = r;
+  document.getElementById('az-val').textContent = fmt(r.axis_azimuth_angle, 2) + '°';
+  document.getElementById('el-val').textContent = fmt(r.axis_elevation_angle, 2) + '°';
+  document.getElementById('eq-val').textContent = fmt(r.axis_equatorial_angle, 2) + '°';
+
+  const cumEl = document.getElementById('cum-err');
+  cumEl.textContent = fmt(r.cumulative_transmission_error) + "'";
+  cumEl.className = 'data-value ' + (r.cumulative_transmission_error >= 1 ? 'danger' : (r.cumulative_transmission_error >= 0.8 ? 'highlight' : 'ok'));
+  document.getElementById('cum-err-bar').style.width = Math.min(100, r.cumulative_transmission_error / 1.5 * 100) + '%';
+
+  document.getElementById('gear1-err').textContent = fmt(r.gear_meshing_error_1) + "'";
+  document.getElementById('gear2-err').textContent = fmt(r.gear_meshing_error_2) + "'";
+  document.getElementById('gear3-err').textContent = fmt(r.gear_meshing_error_3) + "'";
+
+  function updateWear(id, barId, val) {
+    const pct = val * 100;
+    const el = document.getElementById(id);
+    el.textContent = pct.toFixed(1) + '%';
+    el.className = 'data-value ' + (val >= 0.85 ? 'danger' : (val >= 0.6 ? 'highlight' : ''));
+    document.getElementById(barId).style.width = pct + '%';
+  }
+  updateWear('wear1', 'wear1-bar', r.gear_wear_level_1);
+  updateWear('wear2', 'wear2-bar', r.gear_wear_level_2);
+  updateWear('wear3', 'wear3-bar', r.gear_wear_level_3);
+
+  document.getElementById('temp').textContent = fmt(r.temperature, 1) + '°C';
+  document.getElementById('humidity').textContent = fmt(r.humidity, 0) + '%';
+  document.getElementById('brg1').textContent = fmt(r.bearing_clearance_1) + "'";
+  document.getElementById('brg2').textContent = fmt(r.bearing_clearance_2) + "'";
+  document.getElementById('brg3').textContent = fmt(r.bearing_clearance_3) + "'";
+}
+
+function updatePointingUI(p) {
+  state.currentPointing = p;
+  document.getElementById('target-ra').textContent = fmt(p.target_ra, 2) + '°';
+  document.getElementById('target-dec').textContent = fmt(p.target_dec, 2) + '°';
+  document.getElementById('ra-err').textContent = (p.ra_error >= 0 ? '+' : '') + fmt(p.ra_error) + "'";
+  document.getElementById('dec-err').textContent = (p.dec_error >= 0 ? '+' : '') + fmt(p.dec_error) + "'";
+  const totalEl = document.getElementById('total-err');
+  totalEl.textContent = fmt(p.total_pointing_error) + "'";
+  totalEl.className = 'data-value ' + (p.total_pointing_error >= 1 ? 'danger' : (p.total_pointing_error >= 0.5 ? 'highlight' : 'ok'));
+  document.getElementById('sky-zone').textContent = p.sky_zone;
+  document.getElementById('etc').textContent = fmt(p.error_transfer_coefficient);
+}
+
+function updateTransmissionUI(t) {
+  state.currentTransmission[t.axis_id] = t;
+  document.getElementById('backlash-err').textContent = fmt(t.backlash_error) + "'";
+  document.getElementById('elastic-err').textContent = fmt(t.elastic_deformation_error) + "'";
+}
+
+function addAlarm(alarm) {
+  state.alarms.unshift(alarm);
+  if (state.alarms.length > 20) state.alarms.pop();
+  renderAlarms();
+}
+
+function renderAlarms() {
+  const container = document.getElementById('alarm-list');
+  if (state.alarms.length === 0) {
+    container.innerHTML = '<div style="color:#8a95b8;font-size:12px;text-align:center;padding:10px;">暂无告警</div>';
+    return;
+  }
+  container.innerHTML = state.alarms.map(a => `
+    <div class="alarm-item level-${a.alarm_level}">
+      <div class="alarm-title">${a.alarm_type}</div>
+      <div>${a.alarm_message}</div>
+      <div class="alarm-time">${new Date(a.timestamp).toLocaleString('zh-CN')}</div>
+    </div>
+  `).join('');
+}
+
+function connectWebSocket() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const wsUrl = `${proto}://${location.hostname}:8080/ws`;
+  console.log('Connecting to', wsUrl);
+
+  const ws = new WebSocket(wsUrl);
+
+  ws.onopen = () => {
+    setConnectedStatus(true);
+    console.log('WebSocket connected');
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      switch (msg.message_type) {
+        case 'sensor_reading':
+          updateSensorUI(msg.payload);
+          break;
+        case 'pointing_accuracy':
+          updatePointingUI(msg.payload);
+          break;
+        case 'transmission_error':
+          updateTransmissionUI(msg.payload);
+          break;
+        case 'alarm':
+          addAlarm(msg.payload);
+          break;
+      }
+    } catch (e) {
+      console.error('Parse WS message error:', e);
+    }
+  };
+
+  ws.onclose = () => {
+    setConnectedStatus(false);
+    console.log('WebSocket disconnected, retrying in 3s...');
+    setTimeout(connectWebSocket, 3000);
+  };
+
+  ws.onerror = (e) => {
+    console.error('WebSocket error:', e);
+    ws.close();
+  };
+}
+
+connectWebSocket();
+</script>
+</body>
+</html>
